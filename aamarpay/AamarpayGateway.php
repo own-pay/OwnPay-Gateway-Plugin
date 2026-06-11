@@ -62,21 +62,21 @@ final class AamarpayGateway implements PluginInterface, GatewayAdapterInterface
         $baseUrl = $mode === 'live' ? self::LIVE_URL : self::SANDBOX_URL;
 
         $separator = (strpos($params['redirect_url'], '?') !== false) ? '&' : '?';
-        $trxId = $params['trx_id'] ?? '';
+        $trxId = $params['trx_id'];
 
-        // Extract or default customer details
-        $email = $params['customer_email'] ?? 'customer@example.com';
-        $phone = $params['customer_phone'] ?? '01700000000';
-        $name  = $params['customer_name'] ?? 'Customer';
+        // Extract or default customer details from metadata
+        $email = $params['metadata']['customer_email'] ?? 'customer@example.com';
+        $phone = $params['metadata']['customer_phone'] ?? '01700000000';
+        $name  = $params['metadata']['customer_name'] ?? 'Customer';
 
         $payload = [
             'store_id'      => $storeId,
             'tran_id'       => $trxId,
             'success_url'   => $params['redirect_url'] . $separator . 'session=' . urlencode($trxId),
-            'fail_url'      => $params['cancel_url'] ?? '',
-            'cancel_url'    => $params['cancel_url'] ?? '',
+            'fail_url'      => $params['cancel_url'],
+            'cancel_url'    => $params['cancel_url'],
             'amount'        => $params['amount'],
-            'currency'      => $params['currency'] ?? 'BDT',
+            'currency'      => $params['currency'],
             'signature_key' => $signatureKey,
             'desc'          => 'Payment ' . $trxId,
             'cus_name'      => $name,
@@ -98,7 +98,7 @@ final class AamarpayGateway implements PluginInterface, GatewayAdapterInterface
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
             CURLOPT_HTTPHEADER     => ['Content-Type: application/json'],
-            CURLOPT_POSTFIELDS     => json_encode($payload),
+            CURLOPT_POSTFIELDS     => (string) json_encode($payload),
         ]);
 
         $response = curl_exec($ch);
@@ -109,9 +109,9 @@ final class AamarpayGateway implements PluginInterface, GatewayAdapterInterface
             throw new \RuntimeException('Aamarpay API connection error: HTTP ' . $httpCode);
         }
 
-        $data = json_decode($response, true);
-        if (empty($data['payment_url'])) {
-            throw new \RuntimeException('Aamarpay initiation failed: ' . ($response ?: 'Empty response'));
+        $data = json_decode((string) $response, true);
+        if (!is_array($data) || empty($data['payment_url']) || !is_string($data['payment_url'])) {
+            throw new \RuntimeException('Aamarpay initiation failed: ' . $response);
         }
 
         return [
@@ -122,10 +122,11 @@ final class AamarpayGateway implements PluginInterface, GatewayAdapterInterface
 
     public function verify(array $callbackData, array $credentials): array
     {
-        $trxId = $callbackData['session'] ?? $callbackData['pay_status'] ?? ''; // or parameter check
-        if ($trxId === '' && isset($callbackData['opt_a'])) {
-            $trxId = $callbackData['opt_a'];
+        $rawTrxId = $callbackData['session'] ?? $callbackData['pay_status'] ?? '';
+        if ($rawTrxId === '' && isset($callbackData['opt_a'])) {
+            $rawTrxId = $callbackData['opt_a'];
         }
+        $trxId = is_scalar($rawTrxId) ? (string) $rawTrxId : '';
 
         if ($trxId === '') {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'failed'];
@@ -158,19 +159,25 @@ final class AamarpayGateway implements PluginInterface, GatewayAdapterInterface
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'api_error'];
         }
 
-        $data = json_decode($response, true);
+        $data = json_decode((string) $response, true);
         if (!is_array($data)) {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'invalid_response'];
         }
 
-        $paid = isset($data['pay_status']) && $data['pay_status'] === 'Successful' && isset($data['status_code']) && (string)$data['status_code'] === '2';
+        $payStatus = isset($data['pay_status']) && is_scalar($data['pay_status']) ? (string) $data['pay_status'] : '';
+        $statusCode = isset($data['status_code']) && is_scalar($data['status_code']) ? (string) $data['status_code'] : '';
+        $paid = $payStatus === 'Successful' && $statusCode === '2';
+
+        $bankTrxId = isset($data['bank_trxid']) && is_scalar($data['bank_trxid']) ? (string) $data['bank_trxid'] : '';
+        $amountVal = isset($data['amount']) && is_scalar($data['amount']) ? (string) $data['amount'] : '';
+        $pgTxnId = isset($data['pg_txnid']) && is_scalar($data['pg_txnid']) ? (string) $data['pg_txnid'] : (string) $trxId;
 
         return [
             'success'        => $paid,
-            'gateway_trx_id' => $data['bank_trxid'] ?? '',
-            'amount'         => $data['amount'] ?? null,
+            'gateway_trx_id' => $bankTrxId,
+            'amount'         => $amountVal,
             'status'         => $paid ? 'completed' : 'failed',
-            'trx_id'         => $data['pg_txnid'] ?? $trxId,
+            'trx_id'         => $pgTxnId,
         ];
     }
 }

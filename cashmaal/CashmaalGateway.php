@@ -69,20 +69,23 @@ final class CashmaalGateway implements PluginInterface, GatewayAdapterInterface
 
         return [
             'redirect_url' => $checkoutUrl . $separator . 'redirect_to=cashmaal',
-            'session_id'   => $params['trx_id'] ?? '',
+            'session_id'   => $params['trx_id'],
         ];
     }
 
     public function verify(array $callbackData, array $credentials): array
     {
-        $trxId = $callbackData['trx_id'] ?? $callbackData['order_id'] ?? '';
-        $cmTid = $callbackData['CM_TID'] ?? '';
+        $rawTrxId = $callbackData['trx_id'] ?? $callbackData['order_id'] ?? '';
+        $trxId = is_scalar($rawTrxId) ? (string) $rawTrxId : '';
+        $cmTidRaw = $callbackData['CM_TID'] ?? '';
+        $cmTid = is_scalar($cmTidRaw) ? (string) $cmTidRaw : '';
 
         if ($cmTid === '') {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'failed'];
         }
 
-        $webId = $credentials['web_id'] ?? '';
+        $webIdRaw = $credentials['web_id'] ?? '';
+        $webId = is_scalar($webIdRaw) ? (string) $webIdRaw : '';
 
         $url = 'https://api.cmaal.com/verify_v2?CM_TID=' . urlencode($cmTid) . '&web_id=' . urlencode($webId);
 
@@ -90,7 +93,8 @@ final class CashmaalGateway implements PluginInterface, GatewayAdapterInterface
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
-            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
         ]);
 
         $response = curl_exec($ch);
@@ -101,59 +105,82 @@ final class CashmaalGateway implements PluginInterface, GatewayAdapterInterface
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'api_error'];
         }
 
-        $data = json_decode($response, true);
+        $data = json_decode((string) $response, true);
         if (!is_array($data)) {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'invalid_response'];
         }
 
         // status = 1 is Successful
-        $paid = isset($data['status']) && (string)$data['status'] === '1';
+        $statusVal = isset($data['status']) && is_scalar($data['status']) ? (string) $data['status'] : '';
+        $paid = $statusVal === '1';
+
+        $transactionId = isset($data['transaction_id']) && is_scalar($data['transaction_id']) ? (string) $data['transaction_id'] : $cmTid;
+        $usdAmount = isset($data['USD_amount']) && is_scalar($data['USD_amount']) ? (string) $data['USD_amount'] : '';
+        $orderId = isset($data['order_id']) && is_scalar($data['order_id']) ? (string) $data['order_id'] : (string) $trxId;
 
         return [
             'success'        => $paid,
-            'gateway_trx_id' => $data['transaction_id'] ?? $cmTid,
-            'amount'         => $data['USD_amount'] ?? null,
+            'gateway_trx_id' => $transactionId,
+            'amount'         => $usdAmount,
             'status'         => $paid ? 'completed' : 'failed',
-            'trx_id'         => $data['order_id'] ?? $trxId,
+            'trx_id'         => $orderId,
         ];
     }
 
+    /** @param array<string, mixed> $txn */
     public function handleCheckoutBefore(array $txn): void
     {
         if (isset($_GET['redirect_to']) && $_GET['redirect_to'] === 'cashmaal' && $this->container !== null) {
-            $mid = (int) $txn['merchant_id'];
+            $mid = is_scalar($txn['merchant_id'] ?? null) ? (int) $txn['merchant_id'] : 0;
 
             $configs = $this->container->get(\OwnPay\Repository\GatewayConfigRepository::class);
             $encryptor = $this->container->get(\OwnPay\Security\FieldEncryptor::class);
+            if (!$configs instanceof \OwnPay\Repository\GatewayConfigRepository || !$encryptor instanceof \OwnPay\Security\FieldEncryptor) {
+                return;
+            }
 
             $credentialsEnc = $configs->forTenant($mid)->findCredentialsBySlug('cashmaal');
             $credentials = [];
-            if ($credentialsEnc) {
+            if (is_string($credentialsEnc) && $credentialsEnc !== '') {
                 $decrypted = $encryptor->decrypt($credentialsEnc);
-                $credentials = json_decode($decrypted, true) ?: [];
+                $decoded = json_decode($decrypted, true);
+                $credentials = is_array($decoded) ? $decoded : [];
             }
 
-            $webId = $credentials['web_id'] ?? '';
+            $webId = isset($credentials['web_id']) && is_scalar($credentials['web_id']) ? (string) $credentials['web_id'] : '';
             $amount = $txn['amount'];
-            $currency = $txn['currency'] ?? 'USD';
+            $currency = is_scalar($txn['currency'] ?? null) ? (string) $txn['currency'] : 'USD';
 
-            $meta = json_decode($txn['metadata'] ?? '{}', true);
-            $clientEmail = $txn['customer_email'] ?? $meta['customer_email'] ?? 'customer@example.com';
+            $metadataStr = is_string($txn['metadata'] ?? null) ? $txn['metadata'] : '{}';
+            $meta = json_decode($metadataStr, true);
+            if (!is_array($meta)) {
+                $meta = [];
+            }
+            $custEmail = is_scalar($txn['customer_email'] ?? null) ? (string) $txn['customer_email'] : '';
+            $clientEmail = $custEmail !== '' ? $custEmail : (isset($meta['customer_email']) && is_scalar($meta['customer_email']) ? (string) $meta['customer_email'] : 'customer@example.com');
 
-            $baseUrl = (empty($_SERVER['HTTPS']) ? 'http' : 'https') . '://' . $_SERVER['HTTP_HOST'];
-            $statusUrl = $baseUrl . '/checkout/' . $txn['trx_id'] . '/status';
+            $httpHost = is_string($_SERVER['HTTP_HOST'] ?? null) ? $_SERVER['HTTP_HOST'] : 'localhost';
+            $baseUrl = (empty($_SERVER['HTTPS']) ? 'http' : 'https') . '://' . $httpHost;
+            $trxIdStr = is_scalar($txn['trx_id'] ?? null) ? (string) $txn['trx_id'] : '';
+            $statusUrl = $baseUrl . '/checkout/' . $trxIdStr . '/status';
 
             // CashMaal will redirect the client back to succes_url/cancel_url.
             // On success, we append paymentID to trigger callback verification.
-            $successUrl = $statusUrl . '?status=success&paymentID=' . urlencode($txn['trx_id']) . '&trx_id=' . urlencode($txn['trx_id']);
+            $successUrl = $statusUrl . '?status=success&paymentID=' . urlencode($trxIdStr) . '&trx_id=' . urlencode($trxIdStr);
             $cancelUrl = $statusUrl . '?status=cancel';
+
+            $amountStr = is_scalar($amount) ? (string) $amount : '';
+            $currencyStr = (string) $currency;
+
+            $nonceVal = $this->container->has('csp_nonce') ? $this->container->get('csp_nonce') : '';
+            $nonceAttr = is_string($nonceVal) && $nonceVal !== '' ? ' nonce="' . htmlspecialchars($nonceVal, ENT_QUOTES, 'UTF-8') . '"' : '';
 
             echo '
             <!DOCTYPE html>
             <html>
             <head>
                 <title>Redirecting to CashMaal...</title>
-                <style>
+                <style' . $nonceAttr . '>
                     body { font-family: sans-serif; text-align: center; padding: 50px; background: #f8fafc; color: #1e293b; }
                     .loader { border: 4px solid #f3f3f3; border-top: 4px solid #1f95f4; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
                     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -164,16 +191,16 @@ final class CashmaalGateway implements PluginInterface, GatewayAdapterInterface
                 <p>Redirecting to CashMaal payment gateway, please wait...</p>
                 <form id="cashmaalForm" action="https://cmaal.com/Pay/" method="POST">
                     <input type="hidden" name="pay_method" value="">
-                    <input type="hidden" name="amount" value="' . htmlspecialchars((string)$amount) . '">
-                    <input type="hidden" name="currency" value="' . htmlspecialchars($currency) . '">
+                    <input type="hidden" name="amount" value="' . htmlspecialchars($amountStr) . '">
+                    <input type="hidden" name="currency" value="' . htmlspecialchars($currencyStr) . '">
                     <input type="hidden" name="succes_url" value="' . htmlspecialchars($successUrl) . '">
                     <input type="hidden" name="cancel_url" value="' . htmlspecialchars($cancelUrl) . '">
                     <input type="hidden" name="client_email" value="' . htmlspecialchars($clientEmail) . '">
                     <input type="hidden" name="web_id" value="' . htmlspecialchars($webId) . '">
-                    <input type="hidden" name="order_id" value="' . htmlspecialchars($txn['trx_id']) . '">
-                    <input type="hidden" name="addi_info" value="Payment ' . htmlspecialchars($txn['trx_id']) . '">
+                    <input type="hidden" name="order_id" value="' . htmlspecialchars($trxIdStr) . '">
+                    <input type="hidden" name="addi_info" value="Payment ' . htmlspecialchars($trxIdStr) . '">
                 </form>
-                <script>
+                <script' . $nonceAttr . '>
                     document.getElementById("cashmaalForm").submit();
                 </script>
             </body>

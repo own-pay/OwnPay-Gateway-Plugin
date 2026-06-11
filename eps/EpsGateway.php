@@ -66,16 +66,17 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
         $merchantTransactionId = 'MTID' . rand(1000000, 9999999);
         $customerOrderId = 'ORDER' . rand(10000, 99999);
 
-        $hashKey = $credentials['hash_key'] ?? '';
+        $hashKeyRaw = $credentials['hash_key'] ?? '';
+        $hashKey = is_scalar($hashKeyRaw) ? (string) $hashKeyRaw : '';
         $hmac = hash_hmac('sha512', $merchantTransactionId, $hashKey, true);
         $xHash = base64_encode($hmac);
 
         $separator = (strpos($params['redirect_url'], '?') !== false) ? '&' : '?';
 
-        // Extract or default customer details
-        $email = $params['customer_email'] ?? 'customer@example.com';
-        $phone = $params['customer_phone'] ?? '01700000000';
-        $name  = $params['customer_name'] ?? 'Customer';
+        // Extract or default customer details from metadata
+        $email = $params['metadata']['customer_email'] ?? 'customer@example.com';
+        $phone = $params['metadata']['customer_phone'] ?? '01700000000';
+        $name  = $params['metadata']['customer_name'] ?? 'Customer';
 
         $payload = [
             'storeId'               => $credentials['store_id'] ?? '',
@@ -87,9 +88,9 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
             'totalAmount'           => $params['amount'],
             'ipAddress'             => $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1',
             'version'               => '1',
-            'successUrl'            => $params['redirect_url'] . $separator . 'ppstatus=success&paymentID=' . urlencode($params['trx_id'] ?? ''),
-            'failUrl'               => $params['cancel_url'] ?? '',
-            'cancelUrl'             => $params['cancel_url'] ?? '',
+            'successUrl'            => $params['redirect_url'] . $separator . 'ppstatus=success&paymentID=' . urlencode($params['trx_id']),
+            'failUrl'               => $params['cancel_url'],
+            'cancelUrl'             => $params['cancel_url'],
             'customerName'          => $name,
             'customerEmail'         => $email,
             'CustomerAddress'       => 'Dhaka, Bangladesh',
@@ -106,18 +107,18 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
             'ShipmentState'         => 'Dhaka',
             'ShipmentPostcode'      => '1200',
             'ShipmentCountry'       => 'BD',
-            'ValueA'                => $params['trx_id'] ?? '',
+            'ValueA'                => $params['trx_id'],
             'ValueB'                => '',
             'ValueC'                => '',
             'ValueD'                => '',
             'ShippingMethod'        => 'NO',
             'NoOfItem'              => '1',
-            'ProductName'           => 'Payment ' . ($params['trx_id'] ?? ''),
+            'ProductName'           => 'Payment ' . $params['trx_id'],
             'ProductProfile'        => 'general',
             'ProductCategory'       => 'Digital',
             'ProductList'           => [
                 [
-                    'ProductName'     => 'Payment ' . ($params['trx_id'] ?? ''),
+                    'ProductName'     => 'Payment ' . $params['trx_id'],
                     'NoOfItem'        => '1',
                     'ProductProfile'  => 'general',
                     'ProductCategory' => 'Digital',
@@ -136,7 +137,7 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
                 'x-hash: ' . $xHash,
                 'Authorization: Bearer ' . $token
             ],
-            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_POSTFIELDS => (string) json_encode($payload),
         ]);
 
         $response = curl_exec($ch);
@@ -147,9 +148,9 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
             throw new \RuntimeException('EPS API connection error: HTTP ' . $httpCode);
         }
 
-        $data = json_decode($response, true);
-        if (empty($data['RedirectURL'])) {
-            throw new \RuntimeException('EPS initiation failed: ' . ($response ?: 'Empty response'));
+        $data = json_decode((string) $response, true);
+        if (!is_array($data) || empty($data['RedirectURL']) || !is_string($data['RedirectURL'])) {
+            throw new \RuntimeException('EPS initiation failed: ' . $response);
         }
 
         return [
@@ -162,9 +163,13 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
     {
         $status = $callbackData['Status'] ?? '';
         $merchantTransactionId = $callbackData['MerchantTransactionId'] ?? '';
-        $trxId = $callbackData['trx_id'] ?? $callbackData['paymentID'] ?? '';
+        $rawTrxId = $callbackData['trx_id'] ?? $callbackData['paymentID'] ?? '';
+        $trxId = is_scalar($rawTrxId) ? (string) $rawTrxId : '';
 
-        if ($status !== 'Success' || $merchantTransactionId === '') {
+        $statusStr = is_scalar($status) ? (string) $status : '';
+        $merchantTransactionIdStr = is_scalar($merchantTransactionId) ? (string) $merchantTransactionId : '';
+
+        if ($statusStr !== 'Success' || $merchantTransactionIdStr === '') {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'failed'];
         }
 
@@ -173,11 +178,12 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
 
         $token = $this->getToken($baseUrl, $credentials);
 
-        $hashKey = $credentials['hash_key'] ?? '';
-        $hmac = hash_hmac('sha512', $merchantTransactionId, $hashKey, true);
+        $hashKeyRaw = $credentials['hash_key'] ?? '';
+        $hashKey = is_scalar($hashKeyRaw) ? (string) $hashKeyRaw : '';
+        $hmac = hash_hmac('sha512', $merchantTransactionIdStr, $hashKey, true);
         $xHash = base64_encode($hmac);
 
-        $url = $baseUrl . '/v1/EPSEngine/CheckMerchantTransactionStatus?merchantTransactionId=' . urlencode($merchantTransactionId);
+        $url = $baseUrl . '/v1/EPSEngine/CheckMerchantTransactionStatus?merchantTransactionId=' . urlencode($merchantTransactionIdStr);
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -197,27 +203,36 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'api_error'];
         }
 
-        $data = json_decode($response, true);
+        $data = json_decode((string) $response, true);
         if (!is_array($data)) {
             return ['success' => false, 'gateway_trx_id' => '', 'status' => 'invalid_response'];
         }
 
-        $paid = isset($data['Status']) && strtolower($data['Status']) === 'success';
+        $statusVal = isset($data['Status']) && is_scalar($data['Status']) ? (string) $data['Status'] : '';
+        $paid = strtolower($statusVal) === 'success';
+
+        $epsTrxId = isset($data['EPSTransactionId']) && is_scalar($data['EPSTransactionId']) ? (string) $data['EPSTransactionId'] : $merchantTransactionIdStr;
+        $totalAmount = isset($data['TotalAmount']) && is_scalar($data['TotalAmount']) ? (string) $data['TotalAmount'] : '';
+        $valueA = isset($data['ValueA']) && is_scalar($data['ValueA']) ? (string) $data['ValueA'] : (string) $trxId;
 
         return [
             'success'        => $paid,
-            'gateway_trx_id' => $data['EPSTransactionId'] ?? $merchantTransactionId,
-            'amount'         => $data['TotalAmount'] ?? null,
+            'gateway_trx_id' => $epsTrxId,
+            'amount'         => $totalAmount,
             'status'         => $paid ? 'completed' : 'failed',
-            'trx_id'         => $data['ValueA'] ?? $trxId,
+            'trx_id'         => $valueA,
         ];
     }
 
+    /** @param array<string, mixed> $credentials */
     private function getToken(string $baseUrl, array $credentials): string
     {
-        $username = $credentials['username'] ?? '';
-        $password = $credentials['password'] ?? '';
-        $hashKey = $credentials['hash_key'] ?? '';
+        $usernameRaw = $credentials['username'] ?? '';
+        $username = is_scalar($usernameRaw) ? (string) $usernameRaw : '';
+        $passwordRaw = $credentials['password'] ?? '';
+        $password = is_scalar($passwordRaw) ? (string) $passwordRaw : '';
+        $hashKeyRaw = $credentials['hash_key'] ?? '';
+        $hashKey = is_scalar($hashKeyRaw) ? (string) $hashKeyRaw : '';
 
         $hmac = hash_hmac('sha512', $username, $hashKey, true);
         $xHash = base64_encode($hmac);
@@ -231,7 +246,7 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
                 'Content-Type: application/json',
                 'x-hash: ' . $xHash
             ],
-            CURLOPT_POSTFIELDS => json_encode([
+            CURLOPT_POSTFIELDS => (string) json_encode([
                 'userName' => $username,
                 'password' => $password
             ]),
@@ -245,9 +260,9 @@ final class EpsGateway implements PluginInterface, GatewayAdapterInterface
             throw new \RuntimeException('EPS Token generation error: HTTP ' . $httpCode);
         }
 
-        $data = json_decode($response, true);
-        if (empty($data['token'])) {
-            throw new \RuntimeException('EPS Token generation failed: ' . ($response ?: 'Empty response'));
+        $data = json_decode((string) $response, true);
+        if (!is_array($data) || empty($data['token']) || !is_string($data['token'])) {
+            throw new \RuntimeException('EPS Token generation failed: ' . $response);
         }
 
         return $data['token'];
