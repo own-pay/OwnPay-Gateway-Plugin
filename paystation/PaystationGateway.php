@@ -69,7 +69,7 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
                 'name'     => 'pay_with_charge',
                 'label'    => 'Fee Pay',
                 'type'     => 'select',
-                'options'  => ['0' => 'Customer', '1' => 'Merchant'],
+                'options'  => ['customer' => 'Customer', 'merchant' => 'Merchant'],
                 'required' => true
             ],
             [
@@ -90,21 +90,21 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
 
         $merchantId = $credentials['merchant_id'] ?? '';
         $merchantPassword = $credentials['merchant_password'] ?? '';
-        $payWithCharge = $credentials['pay_with_charge'] ?? '0';
+        $payWithCharge = ($credentials['pay_with_charge'] ?? 'customer') === 'merchant' ? '1' : '0';
         $checkoutItems = $credentials['checkout_items'] ?? 'Payment';
 
-        $trxId = $params['trx_id'] ?? '';
+        $trxId = $params['trx_id'];
         $amount = number_format((float) $params['amount'], 2, '.', '');
-        $redirectUrl = $params['redirect_url'] ?? '';
+        $redirectUrl = $params['redirect_url'];
 
         $postFields = [
             'invoice_number'  => $trxId,
             'currency'        => 'BDT',
             'payment_amount'  => $amount,
             'reference'       => $trxId,
-            'cust_name'       => $params['customer_name'] ?? 'Customer',
-            'cust_phone'      => $params['customer_phone'] ?? '01700000000',
-            'cust_email'      => $params['customer_email'] ?? 'customer@example.com',
+            'cust_name'       => $params['metadata']['customer_name'] ?? 'Customer',
+            'cust_phone'      => $params['metadata']['customer_phone'] ?? '01700000000',
+            'cust_email'      => $params['metadata']['customer_email'] ?? 'customer@example.com',
             'cust_address'    => 'Bangladesh',
             'pay_with_charge' => $payWithCharge,
             'callback_url'    => $redirectUrl,
@@ -118,8 +118,8 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_POSTFIELDS     => $postFields,
         ]);
 
@@ -131,9 +131,9 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
             throw new \RuntimeException('PayStation API Error: HTTP ' . $httpCode);
         }
 
-        $result = json_decode($response, true);
-        if (empty($result['payment_url'])) {
-            $errMsg = $result['message'] ?? 'Missing payment URL';
+        $result = json_decode((string) $response, true);
+        if (!is_array($result) || empty($result['payment_url']) || !is_string($result['payment_url'])) {
+            $errMsg = (is_array($result) && isset($result['message']) && is_scalar($result['message'])) ? (string) $result['message'] : 'Missing payment URL';
             throw new \RuntimeException('PayStation Initiation Error: ' . $errMsg);
         }
 
@@ -145,26 +145,27 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
 
     public function verify(array $callbackData, array $credentials): array
     {
-        $status = $callbackData['status'] ?? '';
-        $invoiceNumber = $callbackData['invoice_number'] ?? '';
+        $statusRaw = $callbackData['status'] ?? '';
+        $status = is_scalar($statusRaw) ? (string) $statusRaw : '';
+        
+        $invoiceNumberRaw = $callbackData['invoice_number'] ?? '';
+        $invoiceNumber = is_scalar($invoiceNumberRaw) ? (string) $invoiceNumberRaw : '';
 
         if (empty($invoiceNumber)) {
             return [
                 'success'        => false,
-                'gateway_trx_id' => null,
-                'amount'         => null,
+                'gateway_trx_id' => '',
                 'status'         => 'pending',
-                'order_id'       => null,
+                'trx_id'         => '',
             ];
         }
 
         if ($status !== 'Successful') {
             return [
                 'success'        => false,
-                'gateway_trx_id' => null,
-                'amount'         => null,
+                'gateway_trx_id' => '',
                 'status'         => 'failed',
-                'order_id'       => $invoiceNumber,
+                'trx_id'         => $invoiceNumber,
             ];
         }
 
@@ -172,15 +173,16 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
         $baseUrl = $mode === 'live' ? 'https://api.paystation.com.bd' : 'https://sandbox.paystation.com.bd';
         $url = $baseUrl . '/transaction-status';
 
-        $merchantId = $credentials['merchant_id'] ?? '';
+        $merchantIdRaw = $credentials['merchant_id'] ?? '';
+        $merchantId = is_scalar($merchantIdRaw) ? (string) $merchantIdRaw : '';
         
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER     => [
                 'merchantId: ' . $merchantId
             ],
@@ -196,38 +198,42 @@ final class PaystationGateway implements PluginInterface, GatewayAdapterInterfac
         if ($httpCode !== 200 || !$response) {
             return [
                 'success'        => false,
-                'gateway_trx_id' => null,
-                'amount'         => null,
+                'gateway_trx_id' => '',
                 'status'         => 'failed',
-                'order_id'       => $invoiceNumber,
+                'trx_id'         => $invoiceNumber,
             ];
         }
 
-        $result = json_decode($response, true);
-        if (($result['status_code'] ?? '') === '200' && ($result['status'] ?? '') === 'success') {
-            $trxStatus = $result['data']['trx_status'] ?? '';
-            $isPaid = in_array(strtolower($trxStatus), ['successful', 'success'], true);
+        $result = json_decode((string) $response, true);
+        if (is_array($result) && ($result['status_code'] ?? '') === '200' && ($result['status'] ?? '') === 'success') {
+            $data = $result['data'] ?? [];
+            if (is_array($data)) {
+                $trxStatus = isset($data['trx_status']) && is_scalar($data['trx_status']) ? (string) $data['trx_status'] : '';
+                $isPaid = in_array(strtolower($trxStatus), ['successful', 'success'], true);
 
-            if ($isPaid) {
-                $gatewayTrxId = $result['data']['trx_id'] ?? $invoiceNumber;
-                $amount = $result['data']['payment_amount'] ?? null;
+                if ($isPaid) {
+                    $gatewayTrxId = isset($data['trx_id']) && is_scalar($data['trx_id']) ? (string) $data['trx_id'] : $invoiceNumber;
+                    $amount = $data['payment_amount'] ?? null;
 
-                return [
-                    'success'        => true,
-                    'gateway_trx_id' => (string) $gatewayTrxId,
-                    'amount'         => $amount !== null ? (string) $amount : null,
-                    'status'         => 'completed',
-                    'order_id'       => $invoiceNumber,
-                ];
+                    $res = [
+                        'success'        => true,
+                        'gateway_trx_id' => $gatewayTrxId,
+                        'status'         => 'completed',
+                        'trx_id'         => $invoiceNumber,
+                    ];
+                    if ($amount !== null && is_scalar($amount)) {
+                        $res['amount'] = (string) $amount;
+                    }
+                    return $res;
+                }
             }
         }
 
         return [
             'success'        => false,
-            'gateway_trx_id' => null,
-            'amount'         => null,
+            'gateway_trx_id' => '',
             'status'         => 'failed',
-            'order_id'       => $invoiceNumber,
+            'trx_id'         => $invoiceNumber,
         ];
     }
 

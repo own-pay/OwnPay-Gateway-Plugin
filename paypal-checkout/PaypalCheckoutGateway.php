@@ -71,9 +71,12 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
 
     public function initiate(array $params, array $credentials): array
     {
-        $clientId = $credentials['paypal_client_id'] ?? '';
-        $secret = $credentials['paypal_secret'] ?? '';
-        $mode = $credentials['paypal_mode'] ?? 'sandbox';
+        $clientIdRaw = $credentials['paypal_client_id'] ?? '';
+        $clientId = is_scalar($clientIdRaw) ? (string) $clientIdRaw : '';
+        $secretRaw = $credentials['paypal_secret'] ?? '';
+        $secret = is_scalar($secretRaw) ? (string) $secretRaw : '';
+        $modeRaw = $credentials['paypal_mode'] ?? 'sandbox';
+        $mode = is_scalar($modeRaw) ? (string) $modeRaw : 'sandbox';
 
         $accessToken = $this->getAccessToken($clientId, $secret, $mode);
         if (!$accessToken) {
@@ -83,10 +86,10 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
         $baseUrl = $mode === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
         $url = $baseUrl . '/v2/checkout/orders';
 
-        $redirectUrl = $params['redirect_url'] ?? '';
-        $cancelUrl = $params['cancel_url'] ?? '';
+        $redirectUrl = $params['redirect_url'];
+        $cancelUrl = $params['cancel_url'];
         $amount = number_format((float) $params['amount'], 2, '.', '');
-        $currency = strtoupper($params['currency'] ?? 'USD');
+        $currency = strtoupper($params['currency']);
 
         $orderData = [
             'intent' => 'CAPTURE',
@@ -109,13 +112,13 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
-                'Authorization: Bearer ' . $accessToken
+                'Authorization: ' . $accessToken
             ],
-            CURLOPT_POSTFIELDS => json_encode($orderData),
+            CURLOPT_POSTFIELDS => (string) json_encode($orderData),
         ]);
 
         $response = curl_exec($ch);
@@ -124,18 +127,21 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
 
         if (($httpCode !== 200 && $httpCode !== 201) || !$response) {
             $errData = json_decode((string) $response, true);
-            $errMsg = $errData['message'] ?? 'HTTP ' . $httpCode;
+            $errMsg = (is_array($errData) && isset($errData['message']) && is_scalar($errData['message'])) ? (string) $errData['message'] : 'HTTP ' . $httpCode;
             throw new \RuntimeException('PayPal Order Creation Error: ' . $errMsg);
         }
 
-        $result = json_decode($response, true);
-        $orderId = $result['id'] ?? '';
+        $result = json_decode((string) $response, true);
+        if (!is_array($result)) {
+            throw new \RuntimeException('PayPal Order Creation Error: Invalid Response');
+        }
+        $orderId = isset($result['id']) && is_scalar($result['id']) ? (string) $result['id'] : '';
         
         $approvalUrl = '';
         if (isset($result['links']) && is_array($result['links'])) {
             foreach ($result['links'] as $link) {
-                if (($link['rel'] ?? '') === 'approve') {
-                    $approvalUrl = $link['href'] ?? '';
+                if (is_array($link) && isset($link['rel']) && is_scalar($link['rel']) && (string)$link['rel'] === 'approve') {
+                    $approvalUrl = isset($link['href']) && is_scalar($link['href']) ? (string)$link['href'] : '';
                     break;
                 }
             }
@@ -153,27 +159,29 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
 
     public function verify(array $callbackData, array $credentials): array
     {
-        $token = $callbackData['token'] ?? null;
+        $tokenRaw = $callbackData['token'] ?? null;
+        $token = is_scalar($tokenRaw) ? (string)$tokenRaw : '';
         if (empty($token)) {
             return [
                 'success'        => false,
-                'gateway_trx_id' => null,
-                'amount'         => null,
+                'gateway_trx_id' => '',
                 'status'         => 'pending',
                 'order_id'       => null,
             ];
         }
 
-        $clientId = $credentials['paypal_client_id'] ?? '';
-        $secret = $credentials['paypal_secret'] ?? '';
-        $mode = $credentials['paypal_mode'] ?? 'sandbox';
+        $clientIdRaw = $credentials['paypal_client_id'] ?? '';
+        $clientId = is_scalar($clientIdRaw) ? (string) $clientIdRaw : '';
+        $secretRaw = $credentials['paypal_secret'] ?? '';
+        $secret = is_scalar($secretRaw) ? (string) $secretRaw : '';
+        $modeRaw = $credentials['paypal_mode'] ?? 'sandbox';
+        $mode = is_scalar($modeRaw) ? (string) $modeRaw : 'sandbox';
 
         $accessToken = $this->getAccessToken($clientId, $secret, $mode);
         if (!$accessToken) {
             return [
                 'success'        => false,
-                'gateway_trx_id' => null,
-                'amount'         => null,
+                'gateway_trx_id' => '',
                 'status'         => 'failed',
                 'order_id'       => $token,
             ];
@@ -188,8 +196,8 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 20,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
                 'Authorization: Bearer ' . $accessToken
@@ -202,7 +210,10 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
         curl_close($ch);
 
         $result = json_decode((string) $response, true);
-        $status = $result['status'] ?? '';
+        $status = '';
+        if (is_array($result) && isset($result['status']) && is_scalar($result['status'])) {
+            $status = (string) $result['status'];
+        }
 
         // 2. If capture failed/already captured, query the order status to verify
         if (($httpCode !== 200 && $httpCode !== 201) || $status !== 'COMPLETED') {
@@ -211,8 +222,8 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             curl_setopt_array($ch, [
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT        => 15,
-                CURLOPT_SSL_VERIFYPEER => false,
-                CURLOPT_SSL_VERIFYHOST => false,
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
                 CURLOPT_HTTPHEADER     => [
                     'Content-Type: application/json',
                     'Authorization: Bearer ' . $accessToken
@@ -222,31 +233,40 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             curl_close($ch);
 
             $result = json_decode((string) $response, true);
-            $status = $result['status'] ?? '';
+            $status = '';
+            if (is_array($result) && isset($result['status']) && is_scalar($result['status'])) {
+                $status = (string) $result['status'];
+            }
         }
 
-        if ($status === 'COMPLETED') {
-            $capture = null;
-            if (isset($result['purchase_units'][0]['payments']['captures'][0])) {
-                $capture = $result['purchase_units'][0]['payments']['captures'][0];
+        if ($status === 'COMPLETED' && is_array($result)) {
+            $purchaseUnits = $result['purchase_units'] ?? null;
+            $firstPurchaseUnit = is_array($purchaseUnits) ? ($purchaseUnits[0] ?? null) : null;
+            $payments = is_array($firstPurchaseUnit) ? ($firstPurchaseUnit['payments'] ?? null) : null;
+            $captures = is_array($payments) ? ($payments['captures'] ?? null) : null;
+            $capture = is_array($captures) ? ($captures[0] ?? null) : null;
+
+            $gatewayTrxId = (is_array($capture) && isset($capture['id']) && is_scalar($capture['id'])) ? (string)$capture['id'] : $token;
+            $amount = null;
+            if (is_array($capture) && isset($capture['amount']) && is_array($capture['amount']) && isset($capture['amount']['value']) && is_scalar($capture['amount']['value'])) {
+                $amount = (string)$capture['amount']['value'];
             }
 
-            $gatewayTrxId = $capture['id'] ?? $token;
-            $amount = $capture['amount']['value'] ?? null;
-
-            return [
+            $res = [
                 'success'        => true,
                 'gateway_trx_id' => (string) $gatewayTrxId,
-                'amount'         => $amount !== null ? (string) $amount : null,
                 'status'         => 'completed',
                 'order_id'       => $token,
             ];
+            if ($amount !== null) {
+                $res['amount'] = (string) $amount;
+            }
+            return $res;
         }
 
         return [
             'success'        => false,
-            'gateway_trx_id' => null,
-            'amount'         => null,
+            'gateway_trx_id' => '',
             'status'         => 'failed',
             'order_id'       => $token,
         ];
@@ -269,8 +289,8 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             CURLOPT_POST           => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 15,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_USERPWD        => $clientId . ':' . $secret,
             CURLOPT_POSTFIELDS     => 'grant_type=client_credentials',
             CURLOPT_HTTPHEADER     => [
@@ -287,7 +307,11 @@ final class PaypalCheckoutGateway implements PluginInterface, GatewayAdapterInte
             return null;
         }
 
-        $result = json_decode($response, true);
-        return $result['access_token'] ?? null;
+        $result = json_decode((string) $response, true);
+        $accessToken = '';
+        if (is_array($result) && isset($result['access_token']) && is_scalar($result['access_token'])) {
+            $accessToken = (string) $result['access_token'];
+        }
+        return $accessToken !== '' ? $accessToken : null;
     }
 }
