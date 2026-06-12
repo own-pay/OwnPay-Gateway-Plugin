@@ -101,7 +101,7 @@ This layout keeps modules isolated, auditable, and easy to maintain.
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.  
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-only)**.  
 See [`LICENSE`](./LICENSE) for full terms.
 
 ---
