@@ -1,0 +1,75 @@
+name: Sync Plugins Metadata to Directory
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Build and Sync Metadata Payload
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            const plugins = [];
+            const items = fs.readdirSync('.', { withFileTypes: true });
+            
+            for (const item of items) {
+              if (item.isDirectory() && !item.name.startsWith('.')) {
+                const manifestPath = path.join(item.name, 'manifest.json');
+                
+                if (fs.existsSync(manifestPath)) {
+                  try {
+                    const manifestRaw = fs.readFileSync(manifestPath, 'utf8');
+                    const manifest = JSON.parse(manifestRaw);
+                    
+                    manifest.slug = item.name;
+                    
+                    if (!manifest.logo) {
+                      manifest.logo = 'icon.svg';
+                    }
+                    
+                    plugins.push(manifest);
+                  } catch (err) {
+                    console.error(`Error parsing manifest.json inside folder "${item.name}":`, err);
+                  }
+                }
+              }
+            }
+            
+            if (plugins.length === 0) {
+              console.log("No valid manifest.json files detected. Skipping sync.");
+              return;
+            }
+            
+            console.log(`Found ${plugins.length} modules to sync. Sending webhook...`);
+            
+            const secret = process.env.SYNC_SECRET;
+            const url = `https://plugins.ownpay.org/webhook.php?secret=${secret}`;
+            
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(plugins)
+            });
+            
+            const responseData = await response.json();
+            if (!response.ok) {
+              throw new Error(`Directory webhook error: ${responseData.message || response.statusText}`);
+            }
+            
+            console.log("Directory Response Status:", responseData);
+          env:
+            SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
