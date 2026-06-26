@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - master
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger from the "Actions" tab on GitHub
 
 jobs:
   sync:
@@ -16,6 +16,8 @@ jobs:
 
       - name: Build and Sync Metadata Payload
         uses: actions/github-script@v7
+        env:
+          SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
         with:
           script: |
             const fs = require('fs');
@@ -24,6 +26,7 @@ jobs:
             const plugins = [];
             const items = fs.readdirSync('.', { withFileTypes: true });
             
+            // Loop through repository root directory entries
             for (const item of items) {
               if (item.isDirectory() && !item.name.startsWith('.')) {
                 const manifestPath = path.join(item.name, 'manifest.json');
@@ -33,8 +36,10 @@ jobs:
                     const manifestRaw = fs.readFileSync(manifestPath, 'utf8');
                     const manifest = JSON.parse(manifestRaw);
                     
+                    // Inject folder name as the unique plugin slug
                     manifest.slug = item.name;
                     
+                    // Set default icon file if none is specified
                     if (!manifest.logo) {
                       manifest.logo = 'icon.svg';
                     }
@@ -54,9 +59,11 @@ jobs:
             
             console.log(`Found ${plugins.length} modules to sync. Sending webhook...`);
             
+            // Construct sync URL using secret token
             const secret = process.env.SYNC_SECRET;
             const url = `https://plugins.ownpay.org/webhook.php?secret=${secret}`;
             
+            // Dispatch POST request to the website sync webhook
             const response = await fetch(url, {
               method: 'POST',
               headers: {
@@ -71,5 +78,3 @@ jobs:
             }
             
             console.log("Directory Response Status:", responseData);
-          env:
-            SYNC_SECRET: ${{ secrets.SYNC_SECRET }}
