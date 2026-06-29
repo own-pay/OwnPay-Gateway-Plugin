@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "mobile",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#eb7324",
   "entrypoint": "ShurjopayGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Shurjopay",

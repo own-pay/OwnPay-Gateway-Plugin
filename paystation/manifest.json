@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "mobile",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#e01a22",
   "entrypoint": "PaystationGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Paystation",
