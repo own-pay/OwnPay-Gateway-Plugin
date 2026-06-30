@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "mfs",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#F15A22",
   "entrypoint": "NagadMerchantApiGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\NagadMerchantApi",

@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "crypto",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#f15a24",
   "entrypoint": "OxapayGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Oxapay",

@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "mfs",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#019A44",
   "entrypoint": "EpsGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Eps",

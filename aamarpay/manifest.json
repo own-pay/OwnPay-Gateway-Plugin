@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "mfs",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#FF6B00",
   "entrypoint": "AamarpayGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Aamarpay",

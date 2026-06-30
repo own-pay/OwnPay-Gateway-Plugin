@@ -6,7 +6,7 @@
   "author": "OwnPay Core",
   "type": "gateway",
   "category": "global",
-  "icon": "assets/icon.png",
+  "icon": "assets/icon.svg",
   "color": "#1F95F4",
   "entrypoint": "CashmaalGateway.php",
   "namespace": "OwnPay\\Modules\\Gateways\\Cashmaal",
